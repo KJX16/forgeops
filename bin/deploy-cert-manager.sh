@@ -3,8 +3,11 @@
 # Script to deploy Cert-Manager into kube-system namespace.
 # Run ./deploy-cert-manager.sh .
 
-# Decrypt encoded service account
-./decrypt.sh ../etc/cert-manager/cert-manager.json
+PROVIDER=$(kubectl get nodes -o jsonpath={.items[0].spec.providerID} | awk -F: '{print $1}')
+if [[ "${PROVIDER}" == "gce" ]]; then
+  # Decrypt encoded service account
+  ./decrypt.sh ../etc/cert-manager/cert-manager.json
+fi
 
 # Create secret so the Cluster Issuer can gain access to CloudDNS
 kubectl create secret generic clouddns --from-file=../etc/cert-manager/cert-manager.json -n kube-system
@@ -30,7 +33,7 @@ do
 done
 
 # Deploy Cert Manager Helm chart
-helm upgrade -i cert-manager --namespace kube-system stable/cert-manager --values ../etc/cert-manager/values.yaml
+helm upgrade -i cert-manager --namespace kube-system stable/cert-manager
 
 # Check that cert-manager is up before deploying the cluster-issuer
 while true;
@@ -59,4 +62,4 @@ sleep 5
 kubectl create -f ../etc/cert-manager/cluster-issuer.yaml -n kube-system
 
 # Delete decrypted service account
-rm ../etc/cert-manager/cert-manager.json
+rm -f ../etc/cert-manager/cert-manager.json || true

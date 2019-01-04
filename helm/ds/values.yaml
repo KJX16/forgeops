@@ -9,15 +9,13 @@
 # and replace the secrets in ./secrets with your own.
 useDefaultSecrets: true
 
-# The default DS baseDN.
-# Note that the default install creates two backends: o=cts and o=userstore
-# The setting below changes the base dn for the o=userstore backend only!
-# We strongly suggest that you *NOT* change the default. There is very little value in
-# having the basedn reflect a unique organizational structure.
-baseDN: "o=userstore"
+# The default DS baseDN for the user store.  Note the ds image creates several backends that are hard coded and this
+# setting will have no impact on those backends. This setting will be removed in the future.
+baseDN: "ou=identities"
 
 # The default instance name. This will create a stateful set that can be resolved at
-#  $instance-0.$instance
+#  $instance-0.$instance. You can also use the service name $instance - which will get (randomly)
+# load balanced to an instance (not recommended )
 instance: ds
 
 component: ds
@@ -26,14 +24,20 @@ component: ds
 userstore:
   enabled: true
 
-# If you wan to disable the cts backend, set to false.
+# If you want to disable specific backends, set to false:
 cts:
+  enabled: true
+
+configstore:
+  enabled: true
+
+idmRepo:
   enabled: true
 
 image:
   repository: forgerock-docker-public.bintray.io/forgerock/ds
   pullPolicy: IfNotPresent
-  tag: 6.5.0-M129.1
+  tag: 6.5.0
 
 # The number of instances in the StatefulSet. Each instance is a combined DS/RS pair.
 # You can not change this after installation.
@@ -45,12 +49,9 @@ storageSize: "10Gi"
 # Set storageClass only on clusters that support it (GCP / AWS).
 #storageClass: fast
 
-# StorageClass is optional. It can be the name of a fast (SSD) class.
-#storageClass: fast
-
 
 backup:
-  # This is an optional paramter that will mount the named PVC volume (most likely an NFS share)
+  # This is an optional parameter that will mount the named PVC volume (most likely an NFS share)
   # on the bak/ directory. If this is not specified, an emptyDir will be mounted instead.
   # The pvc is usually created by the dsadmin/ chart.
   #pvcClaimName: ds-backup
@@ -83,11 +84,11 @@ resources:
 
 # DS persistence switch. Setting this to false disables volume claims - all data is stored inside the docker image.
 # Used in testing environments without pv providers. When the pod is terminated, the DS data will be deleted!
-# If you run into issues with minikube set this to false. See https://github.com/kubernetes/minikube/issues/1990
 persistence: true
 
 # Pod Anti Affinity switch. For production this should be set to "hard", otherwise use "soft".
-# The hard setting means that do not deploy more than one pod in a node which is critical for HA.
+# The hard setting will force ds pods to be spread out over multiple hosts/zones. soft is best effort
+# but pods will still be scheduled together if sufficient resources are not available.
 podAntiAffinity: "soft"
 
 # This is the exact value for TopologyKey. The other possible value is "failure-domain.beta.kubernetes.io/zone"
@@ -104,3 +105,8 @@ restore:
   # A backup folder contains a full backup and a number of incrementals. The most up to date incremental 
   # is used to recover.
   enabled: false
+
+securityContext:
+  runAsUser: 11111
+  fsGroup: 11111
+  supplementalGroups: [ 0 ]

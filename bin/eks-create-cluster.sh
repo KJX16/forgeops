@@ -2,9 +2,9 @@
 # Copyright (c) 2016-2017 ForgeRock AS. Use of this source code is subject to the
 # Common Development and Distribution License (CDDL) that can be found in the LICENSE file
 #
-# Sample script to create a Kubernetes cluster on Google Kubernetes Engine (EKS)
-# You must have the gcloud command installed and access to a GCP project.
-# See https://cloud.google.com/container-engine/docs/quickstart
+# Sample script to create a Kubernetes cluster on Elastic Kubernetes Service (EKS)
+# You must have the aws command installed and access EKS cluster.
+# See https://docs.aws.amazon.com/cli/latest/userguide/awscli-install-bundle.html
 
 set -o errexit
 set -o pipefail
@@ -21,7 +21,7 @@ echo -e "\tCluster Version = ${EKS_CLUSTER_VERSION}"
 echo -e "\tRole ARN = ${EKS_ROLE_ARN}"
 echo -e "\tVPC ID = ${EKS_VPC_ID}"
 echo -e "\tSubnets = ${EKS_SUBNETS}"
-echo -e "\tSecuity Group = ${EKS_SECURITY_GROUPS}"
+echo -e "\tSecurity Group = ${EC2_SECURITY_GROUP}"
 echo ""
 echo "=> Do you want to continue creating the cluster with these settings?"
 read -p "Continue (y/n)?" choice
@@ -38,15 +38,15 @@ echo ""
 
 CLUSTER_ARN=$(aws eks create-cluster --name $EKS_CLUSTER_NAME \
               --role-arn $EKS_ROLE_ARN \
-              --resources-vpc-config subnetIds=$EKS_SUBNETS,securityGroupIds=$EKS_SECURITY_GROUPS \
+              --resources-vpc-config subnetIds=$EKS_SUBNETS,securityGroupIds=$EC2_SECURITY_GROUP \
               --query cluster.arn --output text)
 
-echo "EKS Cluster created, usually takes 10 minutes..."
+echo "EKS Cluster is being created.  Usually it takes 10 minutes..."
 
 while :
 do
     CLUSTER_STATUS=$(aws eks describe-cluster \
-                      --name EKS_CLUSTER_NAME --query cluster.status --output text)
+                      --name $EKS_CLUSTER_NAME --query cluster.status --output text)
 
     if [ $CLUSTER_STATUS == "CREATING" ]; then
       echo "Waiting for EKS cluster to be ready..."
@@ -54,8 +54,8 @@ do
     elif [ $CLUSTER_STATUS == "ACTIVE" ]; then
       echo "EKS cluster is ready"
       aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --kubeconfig ~/.kube/config-eks
-      kubectx $CLUSTER_ARN
-      export KUBECONFIG=~/.kube/config-eks
+      export KUBECONFIG=$KUBECONFIG:~/.kube/config-eks
+      kubectl config set-context ${CLUSTER_ARN}
       break
     else
       echo "Failed to create EKS cluster. Status: ${CLUSTER_STATUS}"

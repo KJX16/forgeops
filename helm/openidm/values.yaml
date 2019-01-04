@@ -18,27 +18,34 @@ config:
   path: /git/config/6.5/default/idm/sync-with-ldap-bidirectional
   #
   # strategy defines how products get their configuration .
-  # Using the git strategy, each helm chart pulls the configurtion from git using an init container.
+  # Using the git strategy, each helm chart pulls the configuration from git using an init container.
   strategy: git
+  # If immutable is true, IDM  will not persist any configuration changes made in the admin UI (or via admin REST calls)
+  # back out to the file system. If you are developing and want to IDM to write configuration changes back out
+  # so they can saved and committed to git, set this to false.
+  immutable: true
+
+secret:
+  name: openidm-secrets-env
 
 # Used to form the FQDN  - see _helpers.tpl
 component: openidm
 
 image:
   repository: forgerock-docker-public.bintray.io/forgerock/openidm
-  tag: 6.5.0-M3
+  tag: 6.5.0
   pullPolicy: IfNotPresent
   # For development use Always
   # pullPolicy: Always
 
-# override Java JVM options.
-javaOpts: "-Xmx1024m -server -XX:+UseG1GC"
+gitImage:
+  repository: forgerock-docker-public.bintray.io/forgerock/git
+  tag: 6.5.0
+  pullPolicy: IfNotPresent
 
-# To enable any of the products to use HTTPS on their external endpoint, set the following flag to true.
-useTLS: false
-# The default behaviour when useTLS = true, is to have cert-manager to manage the certificate request/renewal via Let's Encrypt.
-# This is enabled by the following flag:
-useCertManager: true
+# override Java JVM options.
+# For JDK 11 add -XX:+IgnoreUnrecognizedVMOptions --add-opens=java.base/jdk.internal.loader=ALL-UNNAMED
+javaOpts: "-Xmx1024m -server -XX:+UseG1GC"
 
 # Specific values
 openidm:
@@ -67,7 +74,7 @@ userstore:
   host: userstore-0.userstore
   password: password
   port: 1389
-  basecontext: "o=userstore"
+  basecontext: "ou=identities"
 
 service:
   name: openidm
@@ -93,12 +100,10 @@ ingress:
   annotations:
     # Nginx specific annotations
     nginx.ingress.kubernetes.io/affinity: "cookie"
-    nginx.ingress.kubernetes.io/session-cookie-name: "route"
-    nginx.ingress.kubernetes.io/session-cookie-hash: "sha1"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 
 # Audit log details for log streaming sidecar containers
-
+# IDM can now stream logs to stdout. This setting will be deprecated in the future.
 auditLogs: []
 # auditLogs:
 #   - name: access-logs
@@ -117,4 +122,4 @@ auditLogs: []
 # Optional sed filter script that does search / replace after the configuration has been checked out
 # This is a work around until OPENIDM-11529 is fixed
 # example - search for qa and replace with prod:
-# sedFilter: "s/openam.qa.acme.com/openam.prod.acme.com/g
+# sedFilter: "s/login.qa.acme.com/login.prod.acme.com/g

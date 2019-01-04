@@ -3,12 +3,24 @@
 # This is used in the first stage of a multi stage build to download the ForgeRock binaries. If you are ForgeRock customer
 # you can obtain an API key as part of your backstage subscription.
 # Another alternative for product binaries is to replace this docker image and script with
-# an alternate version that copies the binaries from a source such as S3, GCS, etc.
+# an alternate version that copies the binaries from a source such as S3, GCS, etc. See ../downloader-sample
 
 API_KEY=${API_KEY:-`cat /api_key`}
 
-GCS_DIR=gs://forgeops-cache
-GCS_CACHE="true"
+
+VERSION=${VERSION:-6.5.0}
+
+# Internal -  for milestone releases
+INTERNAL_REPO=https://maven.forgerock.org/repo/internal-releases/org/forgerock
+
+# Private releases - includes only released products
+PRIVATE_REPO=https://maven.forgerock.org/repo/private-releases/org/forgerock
+
+# Default to private (release) repo
+REPO=$PRIVATE_REPO
+
+# Pass this in via the environment to use a GCS cache for the artifacts. You must have RW access to this bucket
+#GCS_DIR=gs://forgeops-cache
 
 if [ -z "$API_KEY" ]
 then
@@ -57,7 +69,8 @@ dl(){
   
     echo "Downloading $src to $3"
 
-    if [ "$GCS_CACHE" = "true" ]; then
+    echo "GCS_CACHE is: $GCS_DIR"
+    if [ -n "$GCS_DIR" ]; then
         gsutil cp $GCS_DIR/$2 $3
         if [ "$?" -eq 0 ];  then
             return 0
@@ -78,29 +91,26 @@ dl(){
         exit 1
     fi
 
-    if [ "$GCS_CACHE" = "true" ]; then
+    if [ -n "$GCS_DIR" ]; then
         echo "Saving a cached copy of $2"
         gsutil cp "$3" "$GCS_DIR/$2" || echo "Could not save to cache. Skipping"
     fi
 
 }
 
-VERSION=${VERSION:-6.5.0}
-# you should not need to edit the paths below
-REPO=https://maven.forgerock.org/repo/internal-releases/org/forgerock
-
-
-while getopts "wv:" opt; do
+while getopts "Iwv:" opt; do
   case ${opt} in
+    I ) REPO=$INTERNAL_REPO ;;
     w ) WGET="true" ;;
     v ) VERSION="${OPTARG}" 
         echo $VERSION | grep SNAPSHOT \
-                && REPO="https://maven.forgerock.org/repo/internal-snapshots/org/forgerock" \
-                && GCS_CACHE="false"
+                && REPO="https://maven.forgerock.org/repo/internal-snapshots/org/forgerock"
+                SNAPSHOT="true"
         ;;
     \? )
-         echo "Usage: dl.sh [-v version] images..."
+         echo "Usage: download [-I] [-v version] images..."
          echo "-c Use curl instead of wget"
+         echo "-I Use the internal repo for milestones"
          echo "-v VERSION - download a specific version (example -v 6.5.0). Default $VERSION"
          echo "Images can be one or more of: $IMAGES"
          echo "If not specified, all images are downloaded"

@@ -11,6 +11,7 @@
 # You can deploy your own custom values file by using the -f <values file> flag.
 
 MONPATH="../etc/prometheus-values"
+DEFAULT_VALUES="${MONPATH}/kube-prometheus.yaml"
 
 USAGE="Usage: $0 [-n <namespace>] [-f <values file>] [-k <kube-prometheus values file>]"
 
@@ -45,11 +46,9 @@ if [ $FILE ]; then
     CUSTOM_FILE="--values ${MONPATH}/${FILE}"
 fi
 
-# set location of kube-prometheus.yaml if provided as an arg, otherwise set to default in etc folder
+# assign kube-prometheus override file if provided as -k arg. 
 if [ $KFILE ]; then
-    KUBE_FILE="${KFILE}"
-else
-    KUBE_FILE="${MONPATH}/kube-prometheus.yaml"
+    OVERRIDE_VALUES="-f ${KFILE}"
 fi
 
 # Deploy to cluster
@@ -58,11 +57,16 @@ if read -t 10 -p "Installing Prometheus Operator and Grafana to '${NAMESPACE}' n
 # Add coreos repo to helm
 helm repo add coreos https://s3-eu-west-1.amazonaws.com/coreos-charts/stable/
 
+# Add frconfig chart to use cert-manager to provide TLS certificate for external access
+if [ $OVERRIDE_VALUES ]; then
+  helm upgrade -i ${NAMESPACE}-frconfig ../helm/frconfig/ $OVERRIDE_VALUES --namespace=$NAMESPACE
+fi
+
 # Install/Upgrade prometheus-operator
 helm upgrade -i ${NAMESPACE}-prometheus-operator coreos/prometheus-operator --set=rbac.install=true --values ${MONPATH}/prometheus-operator.yaml --namespace=$NAMESPACE
 
 # Install/Upgrade kube-prometheus
-helm upgrade -i ${NAMESPACE}-kube-prometheus coreos/kube-prometheus --set=rbac.install=true -f $KUBE_FILE --namespace=$NAMESPACE
+helm upgrade -i ${NAMESPACE}-kube-prometheus coreos/kube-prometheus --set=rbac.install=true -f $DEFAULT_VALUES $OVERRIDE_VALUES --namespace=$NAMESPACE
 
 # Install/Upgrade forgerock-servicemonitors
 helm upgrade -i ${NAMESPACE}-forgerock-metrics ../helm/forgerock-metrics $CUSTOM_FILE --set=rbac.install=true --namespace=$NAMESPACE

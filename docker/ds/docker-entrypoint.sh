@@ -20,46 +20,40 @@ source /opt/opendj/env.sh
 rm -f /opt/opendj/locks/server.lock
 mkdir -p locks
 
-
-# At runtime we set the Directory Manager password using the mounted secrets
-update_ds_password()
-{
-    if [ ! -f "$DIR_MANAGER_PW_FILE" ]; then
-        echo "Can't find the directory manager password file. Won't change the password"
-        return
-    fi
-    echo "Updating the directory manager password"
-    pw=`bin/encode-password  -s PBKDF2 -f $DIR_MANAGER_PW_FILE | sed -e 's/Encoded Password:  "//' -e 's/"//g' 2>/dev/null`
-    pw="userPassword: $pw"
-    head -n -2  db/rootUser/rootUser.ldif >/tmp/pw
-    echo "$pw" >>/tmp/pw 
-    mv /tmp/pw db/rootUser/rootUser.ldif
-
-    if [ ! -f "$MONITOR_PW_FILE" ]; then
-        echo "Can't find the monitor user password file. Won't change the password"
+# Given a file $1 containing a new password, and an ldif file $2
+# Replace the userPassword attribute with the new password
+update_pw() {
+     if [ ! -f "$1" ]; then
+        echo "Can't find the password file $1. Won't change the password in $2"
         return
     fi
 
-    echo "Updating the monitor user password"
-    pw=`bin/encode-password  -s PBKDF2 -f $MONITOR_PW_FILE | sed -e 's/Encoded Password:  "//' -e 's/"//g' 2>/dev/null`
-    pw="userPassword: $pw"
-    head -n -2  db/monitorUser/monitorUser.ldif >/tmp/pw
-    echo "$pw" >>/tmp/pw 
-    mv /tmp/pw db/monitorUser/monitorUser.ldif
+    echo "Updating the password in $2"
+    # Set the JVM args so we dont blow up the container memory.
+    pw=$(OPENDJ_JAVA_ARGS="-Xmx256m" bin/encode-password  -s PBKDF2 -f $1 | sed -e 's/Encoded Password:  "//' -e 's/"//g' 2>/dev/null)
+    # $pw can contian / - so need to use alternate sed delimiter.
+    sed -ibak "s#userPassword: .*#userPassword: $pw#" "$2"
 }
 
 relocate_data() 
 {
-    if [ -d data/db/userRoot ]; then 
+    # Does data/db contain directories?
+    if [ "$(find data/db  -type d)" ]; then
         echo "Data volume contains existing data"
-        return
+	# If continer is restarted then original db directory reappears 
+	# from the docker image hence move it out of the way otherwise
+	# symbolic linking below will not work
+	mv db db.tmp || true
+	ln -s data/db .
+    else
+        # The data directory is mounted as pvc in k8s env.  If testing
+        # with "docker run",  make sure to  mount a data volume
+
+        # If there is no "db" under "data" then this must be the first time
+        echo "No existing data found. Moving default db directory to data partition and symbolic linking it"
+        mv db/ data/
+        ln -s data/db .
     fi
-    mkdir -p data/db
-    for dir in ctsRoot userRoot ads-truststore adminRoot idmRoot
-    do
-        echo "Copying $dir"
-        cp -r db/$dir data/db/$dir
-    done
 }
 
 start() {
@@ -78,13 +72,14 @@ pause() {
 
 init_container() {
     relocate_data
-    update_ds_password
+    # Set the passwords to the values of the mounted secrets.
+    update_pw "$DIR_MANAGER_PW_FILE" data/db/rootUser/rootUser.ldif
+    update_pw "$MONITOR_PW_FILE"  data/db/monitorUser/monitorUser.ldif
 }
-
 
 # Restore from a backup
 restore() {
-    if [ -d data/db/userRoot ]; then 
+    if [ "$(find data/db  -type d)" ]; then
         echo "Restore will not overwrite existing data."
         exit 0
     fi

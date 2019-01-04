@@ -69,11 +69,13 @@ shift $((OPTIND -1))
 
 if [ ! -z "$INCREMENTAL" ]; then
   IMAGES=`git diff --name-only "HEAD..HEAD~$INCREMENTAL" | sort -u  | grep "docker/" | awk 'BEGIN {FS="/"} {print $2}' | uniq`
-  echo "Incremental build: $IMAGES"
+ 
   if [ -z "$IMAGES" ]; then
     echo "No images changed in the last $INCREMENTAL commits"
     exit 0
   fi
+
+   echo "Incremental build of changed in the last $INCREMENTAL commits. Changes: $IMAGES"
 fi
 
 # Test for the forgerock downloader image - needed to download bits
@@ -81,37 +83,40 @@ fi
 DL=`docker images -q forgerock/downloader`
 
 if [ -z "$DL" ]; then 
-  echo "Can't find forgerock/downloader image needed to download ForgeRock binaries. I will attempt to build it"
-  if [ -z "$API_KEY" ]; then
-    echo "Artifactory API_KEY environment variable is not set. You must export API_KEY=your_artifactory_api_key"
-    exit 1
-  fi
-  docker build -t forgerock/downloader --build-arg API_KEY=$API_KEY downloader
+    echo "Can't find forgerock/downloader image needed to download ForgeRock binaries. I will attempt to build it"
+
+    if [ -z "$API_KEY" ]; then
+      echo "Artifactory API_KEY environment variable is not set. You must export API_KEY=your_artifactory_api_key"
+      exit 1
+    fi  
+    echo "Building downloader"
+    docker build -t forgerock/downloader --build-arg API_KEY=$API_KEY downloader
 fi 
 
 # Take the build list from a CSV file..
 if [ -n "$BUILD_CSV" ]; then  
-  while IFS=, read -r folder artifact tags 
+  while IFS=, read -r folder artifact tag
   do       
+
+      if [ ! -z "$INCREMENTAL" ]; then
+          # If the folder is not in the list of images, skip it
+          echo $IMAGES | grep $folder  || continue
+      fi
+
+      
       ${DRYRUN} docker build  $NETWORK --build-arg VERSION=$artifact -t $folder $folder
 
       # For each registry we support ()
       # for reg in "gcr.io/engineering-devops"
       for reg in "gcr.io/engineering-devops" "forgerock-docker-public.bintray.io/forgerock" 
       do
-          # We always tag with the artifact
-          img="${reg}/${folder}:${artifact}"
-          ${DRYRUN} docker tag $folder:latest "$img"
-          # Additional tags
-          for tag in $tags 
-          do 
-              img="${reg}/${folder}:${tag}"
-              ${DRYRUN} docker tag $folder:latest $img
-             
-          done
+          img="${reg}/${folder}"
+          ${DRYRUN} docker tag ${folder} "${img}:${tag}"
+          ${DRYRUN} docker tag ${folder} "${img}:latest"
+        
           # Push all tags.
            if [ -n "$PUSH" ]; then
-            ${DRYRUN} docker push "${reg}/${folder}"
+            ${DRYRUN} docker push "${img}"
           fi
       done
      

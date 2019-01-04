@@ -4,12 +4,18 @@
 # Deployment script that can be used for CI automation, etc.
 # This script assumes that kubectl and helm are available, and have been configured
 # with the correct context for the cluster.
-# Warning: This script will purge any existig deployments in the target namespace!
+# Warning: 
+#   - This script will purge any existig deployments in the target namespace!
+#   - This script is not supported by Forgerock
+#   
+# Usage:
+#   - You must provide folder that contains env.sh script that contains:
+#       - DOMAIN, NAMESPACE, COMPONENTS vars
+#   - You may provide yaml files for each component. Values in these files will
+#     override default values for helm charts
+#   - For examples look into: forgeops/samples/config/
 #
-# This script will also do the following:
-#   - Deploy AM along with DS (configstore, userstore and CTS)
-#   - Ensure configs are in place
-#   - Restart AM to take all configuration online
+#
 ####################################################################################
 
 set -o errexit
@@ -106,9 +112,9 @@ chk_config()
     fi
     echo -e "=>\tComponents: \"${COMPONENTS[*]}\""
 
-    AM_URL="${URL_PREFIX:-openam}.${NAMESPACE}.${DOMAIN}"
+    AM_URL="${URL_PREFIX:-login}.${NAMESPACE}.${DOMAIN}"
+    IDM_URL="${IDM_URL_PREFIX:-openidm}.${NAMESPACE}.${DOMAIN}"
 }
-
 
 create_namespace()
 {
@@ -159,7 +165,7 @@ deploy_charts()
            CHART_YAML="-f ${CFGDIR}/${comp}.yaml"
         fi
 
-        ${DRYRUN} helm install --name ${comp}-${NAMESPACE} \
+        ${DRYRUN} helm upgrade -i ${NAMESPACE}-${comp} \
             ${YAML} ${CHART_YAML} \
             --namespace=${NAMESPACE} ${DIR}/helm/${chart}
     done
@@ -168,20 +174,32 @@ deploy_charts()
 isalive_check()
 {
     PROTO="https"
-    if [[ -f ${CFGDIR}/openam.yaml || -f ${CFGDIR}/common.yaml ]]; then
-        if $(grep -sq -e '^tlsStrategy:\s*\bhttp\b' ${CFGDIR}/common.yaml ${CFGDIR}/openam.yaml); then
-            PROTO="http"
-        fi
-    fi
-    ALIVE_JSP="${PROTO}://${AM_URL}/openam/isAlive.jsp"
+    ALIVE_JSP="${PROTO}://${AM_URL}/isAlive.jsp"
     echo "=> Testing ${ALIVE_JSP}"
     STATUS_CODE="503"
     until [ "${STATUS_CODE}" = "200" ]; do
         echo "   ${ALIVE_JSP} is not alive, waiting 10 seconds before retry..."
         sleep 10
-        STATUS_CODE=$(curl -k -LI  ${ALIVE_JSP} -o /dev/null -w '%{http_code}\n' -s)
+        STATUS_CODE=$(curl --connect-timeout 5 -k -LI  ${ALIVE_JSP} -o /dev/null -w '%{http_code}\n' -sS || true)
     done
     echo "=> AM is alive"
+}
+
+isalive_check_idm()
+{
+    PROTO="https"
+    IDM_PING_ENDPOINT="${PROTO}://${IDM_URL}/openidm/info/ping"
+    echo "=> Testing ${IDM_PING_ENDPOINT}"
+    STATUS_CODE="503"
+    until [ "${STATUS_CODE}" = "200" ]; do
+        echo "   ${IDM_PING_ENDPOINT} is not alive, waiting 10 seconds before retry..."
+        sleep 10
+
+        STATUS_CODE=$(curl --header "X-OpenIDM-Username: openidm-admin" --header "X-OpenIDM-Password: openidm-admin" \
+          --connect-timeout 5 -k ${IDM_PING_ENDPOINT} -o /dev/null -w '%{http_code}\n' -sS || true)
+        #echo "IDM Status code: $STATUS_CODE"
+    done
+    echo "=> IDM is alive"
 }
 
 import_check()
@@ -208,7 +226,7 @@ import_check()
 }
 
 restart_am()
-{  
+{
     OPENAM_POD_NAME=$(kubectl -n=${NAMESPACE} get pods --selector=app=openam \
         -o jsonpath='{.items[*].metadata.name}')
     echo "=> Deleting \"${OPENAM_POD_NAME}\" to restart and read newly imported configuration"
@@ -233,7 +251,7 @@ scale_am()
 scale_idm()
 {
     echo "=> Scaling IDM deployment..."
-    DEPNAME=$(kubectl get deployment -l app=openidm -o name)
+    DEPNAME=$(kubectl get statefulset -l app=openidm -o name)
     kubectl scale --replicas=2 ${DEPNAME} || true
     if [ $? -ne 0 ]; then
         echo "Could not scale IDM deployment.  Please check error and fix."
@@ -249,13 +267,12 @@ deploy_hpa()
     fi
 }
 
-
 ###############################################################################
 # main
 ###############################################################################
 
 YAML="" # Additional YAML options for helm
-ENV_SH="" 
+ENV_SH=""
 OPT_NAMESPACE=""
 RMALL=false
 DRYRUN=""
@@ -282,16 +299,23 @@ if [[ " ${COMPONENTS[@]} " =~ " openam " ]]; then
     restart_am
 fi
 
+
+
 # Do not scale or deploy hpa on minikube
 if [ "${CONTEXT}" != "minikube" ]; then
     if [[ " ${COMPONENTS[@]} " =~ " openam " ]]; then
       scale_am
     fi
-    
+
     if [[ " ${COMPONENTS[@]} " =~ " openidm " ]]; then
       scale_idm
     fi
     #deploy_hpa # TODO
+fi
+
+if [[ " ${COMPONENTS[@]} " =~ " openidm " ]]; then
+    echo "IDM is present in deployment, running IDM live checks"
+    isalive_check_idm
 fi
 
 # Schedule directory backup
@@ -299,7 +323,4 @@ echo ""
 echo "=> For each directory pod you want to backup execute the following command"
 echo "   $ kubectl exec -it <podname> scripts/schedule-backup.sh"
 
-printf "\e[38;5;40m=======> Deployment is ready <========\n"
-
-
-
+printf "\e[38;5;40m=======> Deployment is ready <========\e[m\n"
