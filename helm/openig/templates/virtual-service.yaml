@@ -6,7 +6,7 @@ metadata:
   name: {{ .Values.component }}
 spec:
   hosts:
-  - "*"
+  -  "{{ .Release.Namespace }}.{{.Values.subdomain }}.{{ .Values.domain }}"
   # The gateway referenced here is defined in the frconfig/ chart.
   gateways:
   - iam-gateway

@@ -7,9 +7,12 @@ Also provides useful generated variables for products (rest endpoints url, etc..
 """
 # Lib imports
 import os
-import subprocess
 import time
 import socket
+
+# Framework imports
+from utils import logger
+import utils.cmd
 
 # Global flag to enable/disable verification of certificates
 try:
@@ -20,6 +23,11 @@ except KeyError:
 
 def is_cluster_mode():
     return 'CLUSTER_NAME' in os.environ
+
+
+def is_minikube_context():
+    out, err = utils.cmd.run_cmd('kubectl config current-context')
+    return out.decode("utf-8").strip() == 'minikube'
 
 
 def tests_namespace():
@@ -36,9 +44,13 @@ def tests_domain():
         return 'forgeops.com'
 
 
+def base_url():
+    return 'https://%s.iam.%s' % (tests_namespace(), tests_domain())
+
+
 class AMConfig(object):
     def __init__(self):
-        self.am_url = 'https://login.%s.%s' % (tests_namespace(), tests_domain())
+        self.am_url = '%s/am' % base_url()
 
         if 'AM_ADMIN_PWD' in os.environ:
             self.amadmin_pwd = os.environ['AM_ADMIN_PWD']
@@ -54,7 +66,7 @@ class AMConfig(object):
 
 class IDMConfig(object):
     def __init__(self):
-        self.idm_url = 'https://openidm.%s.%s/openidm' % (tests_namespace(), tests_domain())
+        self.idm_url = '%s/openidm' % base_url()
 
         if 'IDM_ADMIN_USERNAME' in os.environ:
             self.idm_admin_username = os.environ['IDM_ADMIN_USERNAME']
@@ -85,7 +97,7 @@ class IDMConfig(object):
 
 class IGConfig(object):
     def __init__(self):
-        self.ig_url = 'https://openig.%s.%s' % (tests_namespace(), tests_domain())
+        self.ig_url = '%s/ig' % base_url()
         self.ssl_verify = SSL_VERIFY
 
 
@@ -93,55 +105,55 @@ class DSConfig(object):
     def __init__(self):
         self.reserved_ports = []
         if is_cluster_mode():
-            self.ds0_url = 'http://userstore-0.userstore.%s.svc.cluster.local:8080' % tests_namespace()
-            self.ds1_url = 'http://userstore-1.userstore.%s.svc.cluster.local:8080' % tests_namespace()
+            self.userstore0_url = 'http://userstore-0.userstore.%s.svc.cluster.local:8080' % tests_namespace()
+            self.userstore1_url = 'http://userstore-1.userstore.%s.svc.cluster.local:8080' % tests_namespace()
+            self.ctsstore0_url = 'http://ctsstore-0.ctsstore.%s.svc.cluster.local:8080' % tests_namespace()
+            self.confistore0_url = 'http://configstore-0.configstore.%s.svc.cluster.local:8080' % tests_namespace()
         else:
             self.helm_cmd = 'kubectl'
-            (self.ds0_url, self.ds0_popen) = self.start_ds_port_forward(instance_nb=0)
-            (self.ds1_url, self.ds1_popen) = self.start_ds_port_forward(instance_nb=1)
+            self.userstore0_local_port = self.get_free_port(8080)
+            self.userstore0_url = 'http://localhost:%s' % self.userstore0_local_port
+            self.userstore1_local_port = self.get_free_port(8080)
+            self.userstore1_url = 'http://localhost:%s' % self.userstore1_local_port
+            self.ctsstore0_local_port = self.get_free_port(8080)
+            self.ctsstore0_url = 'http://localhost:%s' % self.ctsstore0_local_port
+            self.configstore0_local_port = self.get_free_port(8080)
+            self.configstore0_url = 'http://localhost:%s' % self.configstore0_local_port
 
-        self.ds0_rest_ping_url = self.ds0_url + '/alive'
-        self.ds1_rest_ping_url = self.ds1_url + '/alive'
+        self.userstore0_rest_ping_url = self.userstore0_url + '/alive'
+        self.userstore1_rest_ping_url = self.userstore1_url + '/alive'
+        self.ctsstore0_rest_ping_url = self.ctsstore0_url + '/alive'
+        self.configstore0_rest_ping_url = self.configstore0_url + '/alive'
         self.ssl_verify = SSL_VERIFY
 
-    def stop_ds_port_forward(self, instance_nb=0):
+    def stop_ds_port_forward(self, instance_name='userstore', instance_nb=0):
         if not is_cluster_mode():
-            eval('self.ds%s_popen' % instance_nb).kill()
+            eval('self.%s%s_popen' % (instance_name, instance_nb)).kill()
 
-    def start_ds_port_forward(self, instance_nb=0):
-        ds_local_port = self.get_free_port(8080)
-        ds_pod_name = 'userstore-%s' % instance_nb
-        cmd = self.helm_cmd + ' --namespace %s port-forward pod/%s %s:8080' % \
-            (tests_namespace(), ds_pod_name, ds_local_port)
-        ds_popen = self.run_cmd_process(cmd)
-        ds_url = 'http://localhost:%s' % ds_local_port
+    def start_ds_port_forward(self, instance_name='userstore', instance_nb=0):
+        if not is_cluster_mode():
+            ds_pod_name = '%s-%s' % (instance_name, instance_nb)
+            ds_local_port = eval('self.%s%s_local_port' % (instance_name, instance_nb))
+            cmd = self.helm_cmd + ' --namespace %s port-forward pod/%s %s:8080' % \
+                  (tests_namespace(), ds_pod_name, ds_local_port)
+            ds_popen = utils.cmd.run_cmd_process(cmd)
 
-        duration = 20
-        start_time = time.time()
-        while time.time() - start_time < duration:
-            soc = socket.socket()
-            result = soc.connect_ex(("", ds_local_port))
-            soc.close()
-            if result != 0:
-                print('Port-forward for pod %s on port %s not ready, waiting 5s...' % (ds_pod_name, ds_local_port))
-                time.sleep(5)
-            else:
-                print('Port-forward for pod %s on port %s is ready' % (ds_pod_name, ds_local_port))
-                return ds_url, ds_popen
+            duration = 60
+            start_time = time.time()
+            while time.time() - start_time < duration:
+                soc = socket.socket()
+                result = soc.connect_ex(("", ds_local_port))
+                soc.close()
+                if result != 0:
+                    logger.warning('Port-forward for pod %s on port %s not ready, waiting 5s...' %
+                                   (ds_pod_name, ds_local_port))
+                    time.sleep(5)
+                else:
+                    logger.info('Port-forward for pod %s on port %s is ready' % (ds_pod_name, ds_local_port))
+                    return ds_popen
 
-        raise Exception('Port-forward for pod %s on port %s not ready after %ss' %
-                        (ds_pod_name, ds_local_port, duration))
-
-    @staticmethod
-    def run_cmd_process(cmd):
-        """
-        Useful for getting flow output
-        :param cmd: command to run
-        :return: Process handle
-        """
-        print('Running following command as process: ' + cmd)
-        popen = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return popen
+            raise Exception('Port-forward for pod %s on port %s not ready after %ss' %
+                            (ds_pod_name, ds_local_port, duration))
 
     def get_free_port(self, initial_port=8080):
         max_range = 1000
